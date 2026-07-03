@@ -5,8 +5,8 @@
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/zor-ai/zor/releases/latest/download/zor-code.exe",
-      "bin": "zor-code.exe"
+      "url": "https://github.com/zor-ai/zor/releases/latest/download/zor-code-windows-x86_64.exe",
+      "bin": "zor-code-windows-x86_64.exe"
     }
   }
 }
