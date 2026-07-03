@@ -23,16 +23,16 @@ jobs:
         run: |
           BIN_DIR="packages/zor-code/dist"
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cp "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-linux-x86_64"
+            mv "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-linux-x86_64"
           elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cp "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-darwin-arm64"
+            mv "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-darwin-arm64"
           elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-windows-x86_64.exe"
+            mv "$BIN_DIR/zor-code.exe" "$BIN_DIR/zor-code-windows-x86_64.exe"
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: zor-code-${{ matrix.os }}
-          path: packages/zor-code/dist/zor-code*
+          path: packages/zor-code/dist/zor-code-*
 
   release:
     needs: build
