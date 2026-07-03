@@ -1,0 +1,12 @@
+{
+  "name": "test-project",
+  "version": "1.0.0",
+  "description": "Zor test project",
+  "dependencies": {
+    "math-lib": "^2.0.0"
+  },
+  "scripts": {
+    "start": "tsc && node dist/app.js",
+    "test": "vitest run"
+  }
+}

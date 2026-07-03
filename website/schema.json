@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zor.dev/schema.json",
+  "title": "Zor Config",
+  "type": "object",
+  "properties": {
+    "model": {
+      "type": "string",
+      "description": "Provider/model format (e.g., opencode/claude-sonnet-4)",
+      "default": "opencode/claude-sonnet-4"
+    },
+    "effort": {
+      "type": "string",
+      "enum": ["off", "minimal", "low", "medium", "high", "xhigh"],
+      "description": "Thinking effort level",
+      "default": "high"
+    },
+    "permissions": {
+      "type": "string",
+      "enum": ["auto", "confirm", "plan", "deny"],
+      "description": "Permission mode for destructive tools",
+      "default": "confirm"
+    },
+    "sandbox": {
+      "type": "boolean",
+      "description": "Enable container/VM sandboxing for bash execution",
+      "default": false
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "Session storage directory",
+          "default": "./.zor/sessions"
+        },
+        "compactThreshold": {
+          "type": "number",
+          "description": "Token threshold for auto-compaction",
+          "default": 160000
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "JSON-encoded MCP server configs",
+          "default": []
+        }
+      }
+    }
+  }
+}

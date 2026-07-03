@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+        working-directory: zor
+      - run: bun run typecheck
+        working-directory: zor/packages/zor-code
+      - run: bun run build
+        working-directory: zor/packages/zor-code
+      - run: bun run test
+        working-directory: zor/packages/zor-code
+      - run: bun run compile
+        working-directory: zor/packages/zor-code

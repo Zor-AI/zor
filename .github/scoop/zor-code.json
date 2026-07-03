@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "description": "Open-source AI coding agent for the terminal",
+  "homepage": "https://github.com/zor-ai/zor",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/zor-ai/zor/releases/latest/download/zor-code.exe",
+      "bin": "zor-code.exe"
+    }
+  }
+}

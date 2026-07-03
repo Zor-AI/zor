@@ -1,0 +1,41 @@
+{
+  "name": "zor-code",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Open-source AI coding agent for the terminal. Multi-provider, local models, MCP support.",
+  "files": ["src/", "docs/", "README.md", "CHANGELOG.md"],
+  "bin": {
+    "zor-code": "src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun --watch src/main.tsx",
+    "build": "bun build src/main.tsx --outdir dist --target bun",
+    "compile": "bun build --compile src/main.tsx --outfile dist/zor-code.exe",
+    "start": "bun dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "bun run build && bun run compile"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.79.8",
+    "@earendil-works/pi-ai": "^0.79.8",
+    "@sinclair/typebox": "^0.32.0",
+    "glob": "^10.3.0",
+    "ink": "^4.4.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "typescript": "^5.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zor-ai/zor"
+  },
+  "homepage": "https://github.com/zor-ai/zor",
+  "bugs": "https://github.com/zor-ai/zor/issues",
+  "keywords": ["ai", "coding-agent", "claude", "terminal", "cli", "developer-tools"],
+  "license": "MIT"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "zor",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "bun run --filter zor-code build",
+    "dev": "bun run --watch packages/zor-code/src/main.tsx",
+    "test": "bun run --filter zor-code test"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

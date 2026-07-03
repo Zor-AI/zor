@@ -1,0 +1,7 @@
+__tests__/
+*.test.ts
+tsconfig.json
+vitest.config.ts
+zor.json
+node_modules/
+*.log
