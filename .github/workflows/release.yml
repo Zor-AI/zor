@@ -16,13 +16,12 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-        working-directory: zor
       - run: bun run compile
-        working-directory: zor/packages/zor-code
+        working-directory: packages/zor-code
       - name: Rename binary for platform
         shell: bash
         run: |
-          BIN_DIR="zor/packages/zor-code/dist"
+          BIN_DIR="packages/zor-code/dist"
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             cp "$BIN_DIR/zor-code" "$BIN_DIR/zor-code-linux-x86_64"
           elif [ "${{ matrix.os }}" = "macos-latest" ]; then
@@ -33,7 +32,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: zor-code-${{ matrix.os }}
-          path: zor/packages/zor-code/dist/zor-code*
+          path: packages/zor-code/dist/zor-code*
 
   release:
     needs: build
