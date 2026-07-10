@@ -6,6 +6,10 @@ import { getProvider } from '../llm/providers';
 import { saveLastSession } from '../llm/session-state';
 import { checkOllamaRunning, listOllamaModels } from '../llm/ollama';
 import { countMessagesTokens } from '../utils/tokens';
+import { getThemes } from '../theme/registry';
+import { exportTool } from './export';
+import { skillTool } from './skill';
+import { replaySession } from '../agent/replay';
 
 function tool(t: any): any { return t; }
 
@@ -132,7 +136,7 @@ export const slashCommands: Record<string, AgentTool> = {
         try {
           const msgs = ctx.agent.state.messages;
           if (Array.isArray(msgs)) realTokens = countMessagesTokens(msgs);
-        } catch {};
+        } catch (e: any) { /* ponytail: token counting is best-effort for cost display */ };
         const modelId = ctx.config.model.split('/')[1] || '';
         let estCost = 'N/A';
         try {
@@ -144,7 +148,7 @@ export const slashCommands: Record<string, AgentTool> = {
             estCost = `$${((realTokens * (c.input + c.output) / 2000) / 1000).toFixed(4)}`;
             }
           }
-        } catch {}
+        } catch (e: any) { /* ponytail: cost estimation is best-effort */ }
         return { content: [{ type: 'text', text: `API usage: ${usage.input} in / ${usage.output} out\nSession tokens: ${realTokens.toLocaleString()}\nEst. cost: ${estCost}` }], details: { usage } };
       } catch (e: any) { return { content: [{ type: 'text', text: `Error: ${e.message}` }], details: { isError: true } }; }
     },
@@ -167,4 +171,20 @@ export const slashCommands: Record<string, AgentTool> = {
       } catch (e: any) { return { content: [{ type: 'text', text: `Error: ${e.message}` }], details: { isError: true } }; }
     },
   }),
+  theme: tool({
+    name: '/theme', label: 'theme', description: 'Switch theme: light, dark, auto, or list themes',
+    parameters: Type.Object({ name: Type.Optional(Type.String({ description: 'Theme name' })) }),
+    execute: async (_id, params, _signal, _onUpdate, ctx) => {
+      const { name } = params as Record<string, any>;
+      const themes = getThemes().map(t => t.name).join(', ');
+      if (!name) return { content: [{ type: 'text', text: `Current theme: ${ctx.config.theme}\nAvailable: ${themes}` }], details: {} };
+      const valid = getThemes().find(t => t.name.toLowerCase() === name.toLowerCase());
+      if (!valid) return { content: [{ type: 'text', text: `Unknown theme: ${name}. Available: ${themes}` }], details: { isError: true } };
+      ctx.config.theme = valid.name;
+      return { content: [{ type: 'text', text: `Theme set to ${valid.name}` }], details: { theme: valid.name } };
+    },
+  }),
+  export: exportTool,
+  skill: skillTool,
+  replay: replaySession,
 };

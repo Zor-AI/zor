@@ -1,5 +1,5 @@
 import { render } from 'ink';
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, useContext, createContext } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { relative, resolve, join } from 'path';
@@ -11,14 +11,28 @@ import { getKeyStatuses, resolveKey, setKey } from './llm/keys';
 import { listAllModels } from './llm/resolve';
 import { getProvider } from './llm/providers';
 import { loadLastSession, saveLastSession } from './llm/session-state';
-import { logger } from './utils/logger';
+import { logger, configureLogger } from './utils/logger';
 import { SessionManager, SessionData } from './session/manager';
 import { SessionPicker } from './tui/session-picker';
+import { StatusBar } from './tui/status-bar';
 import { setConfirmationCallback, getPendingConfirmation, resolveConfirmation } from './permissions/confirm';
 import { countMessagesTokens } from './utils/tokens';
+import { ThemeProvider, useThemeStyles } from './theme';
+import { loadKeybindings, resolveKeybinding, Action, DEFAULT_KEYBINDINGS } from './keybindings';
+import { runRpc } from './rpc';
+import { loadExtensions, mergeContributions, ExtensionContribution } from './extensions';
+import { setSandboxConfig } from './agent/sandbox';
 
 const MAX_INPUT_CHARS = 100_000;
 const IS_PIPED = !process.stdin.isTTY;
+const IS_RPC = process.argv.includes('--rpc');
+
+if (IS_RPC) {
+  (async () => {
+    await runRpc();
+  })();
+  process.exit(0);
+}
 
 if (process.argv.includes('--version') || process.argv.includes('-v')) {
   console.log(`Zor Code v${VERSION}`);
@@ -30,6 +44,7 @@ Usage:
   zor-code [provider/model]      Start interactive TUI
   zor-code --continue            Resume latest session
   zor-code --resume [id]         Resume specific session
+  zor-code --rpc                 Start JSON-RPC mode (stdin/stdout)
   echo "task" | zor-code         Piped input mode
   zor-code --version             Show version
   zor-code --help                Show this help
@@ -66,6 +81,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 function DiffLine({ content }: { content: string }) {
+  const theme = useThemeStyles();
   const lines = content.split('\n');
   const firstDiff = lines.findIndex(l => l.startsWith('+') || l.startsWith('-'));
   if (firstDiff === -1 || firstDiff >= lines.length * 0.8) return <Text>{content}</Text>;
@@ -73,9 +89,9 @@ function DiffLine({ content }: { content: string }) {
   return (
     <Box flexDirection="column">
       {lines.map((line, i) => {
-        if (line.startsWith('+')) return <Text key={i} color="#00ff00">{line}</Text>;
-        if (line.startsWith('-')) return <Text key={i} color="#ff0000">{line}</Text>;
-        return <Text key={i} dimColor>{line}</Text>;
+        if (line.startsWith('+')) return <Text key={i} color={theme.diffAdd} backgroundColor={theme.diffAdd}>{line}</Text>;
+        if (line.startsWith('-')) return <Text key={i} color={theme.diffRemove} backgroundColor={theme.diffRemove}>{line}</Text>;
+        return <Text key={i} color={theme.textMuted}>{line}</Text>;
       })}
     </Box>
   );
@@ -90,12 +106,13 @@ function MessageContent({ content }: { content: string }) {
 }
 
 function StartupHeader() {
+  const theme = useThemeStyles();
   const cwd = process.cwd();
   const shortCwd = cwd.split(/[\\/]/).slice(-2).join('/');
   return (
     <Box flexDirection="row" justifyContent="space-between" paddingX={1} marginBottom={1}>
-      <Text color="#9b59b6" bold>{' ⚡ Zor Code'}</Text>
-      <Text color="dim">v{VERSION} | {shortCwd}</Text>
+      <Text color={theme.primary} bold>{' ⚡ Zor Code'}</Text>
+      <Text color={theme.textMuted}>v{VERSION} | {shortCwd}</Text>
     </Box>
   );
 }
@@ -113,7 +130,7 @@ function promptLine(question: string): Promise<string> {
     }
 
     try {
-      try { if (!wasRaw) process.stdin.setRawMode(true); } catch {}
+      try { if (!wasRaw) process.stdin.setRawMode(true); } catch { /* ponytail: setRawMode fails on some Windows terminals, non-critical */ }
     } catch {
       import('readline').then(({ createInterface }) => {
         const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -130,7 +147,7 @@ function promptLine(question: string): Promise<string> {
         if (ch === '\r' || ch === '\n') {
           process.stdout.write('\n');
           if (!wasRaw && process.stdin.isTTY) {
-            try { process.stdin.setRawMode(false); } catch {}
+            try { process.stdin.setRawMode(false); } catch { /* ponytail: non-critical on Windows */ }
           }
           process.stdin.off('data', onData);
           resolve(buf.trim());
@@ -146,7 +163,7 @@ function promptLine(question: string): Promise<string> {
         if (ch === '\x03') {
           process.stdout.write('\n');
           if (!wasRaw && process.stdin.isTTY) {
-            try { process.stdin.setRawMode(false); } catch {}
+            try { process.stdin.setRawMode(false); } catch { /* ponytail: non-critical on Windows */ }
           }
           process.stdin.off('data', onData);
           process.exit(0);
@@ -244,7 +261,8 @@ async function pickProviderFromKeys(config: ZorConfig): Promise<void> {
 }
 
 function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; existingSession?: SessionData }) {
-  const config = useMemo(() => initialConfig, [initialConfig]);
+  const [config, setConfig] = useState<ZorConfig>(initialConfig);
+  const theme = useThemeStyles();
   const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -263,6 +281,13 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
   const [pickerSessions, setPickerSessions] = useState<SessionData[]>([]);
   const [confirmInfo, setConfirmInfo] = useState<{ toolName: string; args: any } | null>(null);
   const confirmResolveRef = useRef<((approved: boolean) => void) | null>(null);
+  const [tokenEstimate, setTokenEstimate] = useState(0);
+  const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (ctx) setCtx({ ...ctx, config });
+  }, [ctx, config]);
+
   const MULTILINE_HEIGHT = 6;
   const inputRef = useRef('');
   const savedInputRef = useRef('');
@@ -332,7 +357,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
                     checkpointsRef.current.push({ path: fp, content: readFileSync(fp, 'utf8') });
                     if (checkpointsRef.current.length > 20) checkpointsRef.current.shift();
                   }
-                } catch {}
+                } catch { /* ponytail: checkpoint read best-effort */ }
               }
               {
                 const argsShort = event.args ? JSON.stringify(event.args).slice(0, 120) : '';
@@ -355,7 +380,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
                       })];
                     });
                   }
-                } catch {}
+                } catch { /* ponytail: session message sync best-effort */ }
               }
               break;
             case 'agent_end':
@@ -389,6 +414,24 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!ctx) return;
+    const updateMetrics = () => {
+      try {
+        const msgs = ctx.agent.state.messages;
+        setTokenEstimate(countMessagesTokens(msgs));
+      } catch {}
+      try {
+        const { execSync } = require('child_process');
+        const branch = execSync('git branch --show-current 2>/dev/null', { encoding: 'utf8', timeout: 500 }).trim();
+        if (branch) setGitBranch(branch);
+      } catch {}
+    };
+    updateMetrics();
+    const id = setInterval(updateMetrics, 5000);
+    return () => clearInterval(id);
+  }, [ctx]);
 
   const handleSlashCommand = useCallback(async (trimmed: string) => {
     const parts = trimmed.slice(1).split(' ');
@@ -469,11 +512,17 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       lines.push('  /speckit.plan     Create implementation plan');
       lines.push('  /speckit.tasks    Generate task breakdown');
       lines.push('  /speckit.implement  Execute implementation');
-      lines.push('  /speckit.converge Audit code vs spec');
-      lines.push('  /clear           Clear screen');
-      lines.push('  /more            Show 200 more messages');
-      lines.push('  /exit            Exit Zor');
-      lines.push('  /help            This help');
+lines.push('  /speckit.converge Audit code vs spec');
+  lines.push('  /export          Export session (html|json|md)');
+  lines.push('  /skill           Run skill template');
+  lines.push('  /replay          Replay a session');
+  lines.push('  /clear           Clear screen');
+  lines.push('  /more            Show 200 more messages');
+  lines.push('  /exit            Exit Zor');
+  lines.push('  /help            This help');
+  lines.push('');
+  lines.push('  Enter            Interrupt agent (during processing)');
+  lines.push('  Alt+Enter        Queue follow-up (during processing)');
       setMessages(prev => [...prev, { role: 'assistant', content: `Commands:\n${lines.join('\n')}` }]);
       setIsProcessing(false);
       return;
@@ -605,30 +654,6 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (cmd === 'export') {
-      if (!ctx) { setIsProcessing(false); return; }
-      try {
-        const exportDir = join(require('os').homedir(), '.zor', 'exports');
-        const { mkdirSync, writeFileSync } = require('fs');
-        mkdirSync(exportDir, { recursive: true });
-        const date = new Date().toISOString().split('T')[0];
-        const filename = `zor-session-${date}-${ctx.session.id.slice(-8)}.md`;
-        const filepath = join(exportDir, filename);
-        const msgs = ctx.agent.state.messages;
-        let md = `# Zor Session Export\n\n**Date:** ${new Date().toISOString()}\n**Session:** ${ctx.session.id}\n**Model:** ${config.model}\n\n---\n\n`;
-        for (const m of msgs) {
-          const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-          md += `### ${m.role}\n\n${content}\n\n`;
-        }
-        writeFileSync(filepath, md, 'utf8');
-        setMessages(prev => [...prev, { role: 'assistant', content: `Session exported to ${filepath} (${msgs.length} messages)` }]);
-      } catch (e: any) {
-        setMessages(prev => [...prev, { role: 'assistant', content: `Export failed: ${e.message}` }]);
-      }
-      setIsProcessing(false);
-      return;
-    }
-
     if (!ctx) { setIsProcessing(false); return; }
 
     const tool = slashCommands[cmd];
@@ -662,9 +687,12 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       const result = await (tool as any).execute('cmd', params, new AbortController().signal, () => {}, ctx);
       const text = result.content?.[0]?.type === 'text' ? result.content[0].text : JSON.stringify(result);
       setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+      if (result.details?.theme) {
+        setConfig(c => ({ ...c, theme: result.details.theme }));
+      }
     } catch (e: any) { setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]); }
     setIsProcessing(false);
-  }, [ctx, pickerModels, config]);
+  }, [ctx, pickerModels]);
 
   const handleSubmit = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -729,7 +757,41 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (key.escape && key.shift) {
+    const keyInfo = {
+      ctrl: key.ctrl,
+      alt: key.alt,
+      shift: key.shift,
+      meta: key.meta,
+      key: key.name || key.key || inputValue,
+    };
+
+    const kbConfig = loadKeybindings(config.keybindings || {});
+
+    // Check for interrupt (highest priority when processing)
+    if (resolveKeybinding(keyInfo, kbConfig) === 'interrupt' && processingRef.current) {
+      if (agentRef) {
+        agentRef.abort();
+        setIsProcessing(false);
+        setMessages(prev => [...prev, { role: 'system', content: 'Interrupted.' }]);
+      }
+      return;
+    }
+
+    // Check for follow-up
+    if (resolveKeybinding(keyInfo, kbConfig) === 'followup' && processingRef.current) {
+      const current = inputRef.current;
+      if (current && agentRef) {
+        agentRef.followUp({ role: 'user', content: current });
+        setMessages(prev => [...prev, { role: 'system', content: `Follow-up queued: ${current.slice(0, 80)}...` }]);
+        inputRef.current = '';
+        setInput('');
+        setCursorPos(0);
+      }
+      return;
+    }
+
+    // Check for undo
+    if (resolveKeybinding(keyInfo, kbConfig) === 'undo') {
       const cps = checkpointsRef.current;
       if (cps.length > 0) {
         const cp = cps.pop()!;
@@ -745,16 +807,8 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (key.escape || inputValue === '\x1b') {
-      if (agentRef && processingRef.current) {
-        agentRef.abort();
-        setIsProcessing(false);
-        setMessages(prev => [...prev, { role: 'system', content: 'Interrupted.' }]);
-      }
-      return;
-    }
-
-    if (key.shift && key.tab) {
+    // Check for permission cycle
+    if (resolveKeybinding(keyInfo, kbConfig) === 'cyclePerms') {
       const modes: Array<'auto' | 'confirm' | 'plan' | 'deny'> = ['auto', 'confirm', 'plan', 'deny'];
       const idx = modes.indexOf(permMode);
       const next = modes[(idx + 1) % modes.length];
@@ -763,7 +817,8 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (key.upArrow && history.length > 0) {
+    // Handle history navigation
+    if (resolveKeybinding(keyInfo, kbConfig) === 'historyUp' && history.length > 0) {
       if (historyIdx === -1) savedInputRef.current = inputRef.current;
       const newIdx = Math.min(history.length - 1, historyIdx + 1);
       setHistoryIdx(newIdx);
@@ -774,7 +829,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (key.downArrow) {
+    if (resolveKeybinding(keyInfo, kbConfig) === 'historyDown') {
       if (historyIdx <= 0) {
         if (historyIdx === 0) {
           setHistoryIdx(-1);
@@ -793,25 +848,58 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    if (key.return && key.shift) {
+    // Handle cursor movement
+    if (resolveKeybinding(keyInfo, kbConfig) === 'cursorLeft') {
+      setCursorPos(prev => Math.max(0, prev - (key.ctrl ? wordLeft(inputRef.current, prev) : 1)));
+      return;
+    }
+    if (resolveKeybinding(keyInfo, kbConfig) === 'cursorRight') {
+      setCursorPos(prev => Math.min(inputRef.current.length, prev + (key.ctrl ? wordRight(inputRef.current, prev) : 1)));
+      return;
+    }
+    if (resolveKeybinding(keyInfo, kbConfig) === 'cursorHome') {
+      setCursorPos(0);
+      return;
+    }
+    if (resolveKeybinding(keyInfo, kbConfig) === 'deleteBackward') {
       const pos = cursorPos;
-      inputRef.current = inputRef.current.slice(0, pos) + '\n' + inputRef.current.slice(pos);
+      if (pos > 0) {
+        inputRef.current = inputRef.current.slice(0, pos - 1) + inputRef.current.slice(pos);
+        setInput(inputRef.current);
+        setCursorPos(pos - 1);
+      }
+      return;
+    }
+    if (resolveKeybinding(keyInfo, kbConfig) === 'deleteForward') {
+      const pos = cursorPos;
+      const left = inputRef.current.slice(0, pos);
+      const wordStart = left.lastIndexOf(' ');
+      const newStart = wordStart === -1 ? 0 : wordStart + 1;
+      inputRef.current = inputRef.current.slice(0, newStart) + inputRef.current.slice(pos);
       setInput(inputRef.current);
-      setCursorPos(pos + 1);
+      setCursorPos(newStart);
       return;
     }
 
-    if (key.return || inputValue === '\r') {
-      if (processingRef.current) return;
-      const current = inputRef.current;
-      if (current) submitRef.current(current);
+    // Handle Enter for submit or newline
+    if (resolveKeybinding(keyInfo, kbConfig) === 'submit') {
+      if ((keyInfo.shift && resolveKeybinding(keyInfo, kbConfig) === 'newline') || key.shift) {
+        const pos = cursorPos;
+        inputRef.current = inputRef.current.slice(0, pos) + '\n' + inputRef.current.slice(pos);
+        setInput(inputRef.current);
+        setCursorPos(pos + 1);
+      } else if (!processingRef.current) {
+        const current = inputRef.current;
+        if (current) submitRef.current(current);
+      }
       return;
     }
 
-    if (key.tab) {
+    // Autocomplete
+    if (resolveKeybinding(keyInfo, kbConfig) === 'complete') {
       const current = inputRef.current;
       if (current.startsWith('/')) {
-        const allCommands = ['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume', '/export', '/speckit.constitution', '/speckit.specify', '/speckit.clarify', '/speckit.plan', '/speckit.tasks', '/speckit.implement', '/speckit.converge'];
+        const allCommands = ['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume', '/export', '/skill', '/replay', '/speckit.constitution', '/speckit.specify', '/speckit.clarify', '/speckit.plan', '/speckit.tasks', '/speckit.implement', '/speckit.converge'];
         const matches = allCommands.filter(c => c.startsWith(current.toLowerCase()));
         if (matches.length === 1) {
           inputRef.current = matches[0];
@@ -845,55 +933,14 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
             inputRef.current = current.slice(0, atIdx) + replacement;
             setInput(inputRef.current);
             setCursorPos(atIdx + replacement.length);
-          } else if (entries.length > 1) {
-            const commonPrefix = entries[0].name;
-            let cPrefix = '';
-            for (let i = 0; i < commonPrefix.length; i++) {
-              if (entries.every(e => e.name[i] === commonPrefix[i])) cPrefix += commonPrefix[i];
-              else break;
-            }
-            if (cPrefix.length > prefix.length) {
-              const rel = relative(process.cwd(), join(absDir, cPrefix)).replace(/\\/g, '/');
-              inputRef.current = current.slice(0, atIdx + 1) + rel;
-              setInput(inputRef.current);
-              setCursorPos(atIdx + 1 + rel.length);
-            }
           }
-        } catch {}
+        } catch { /* ponytail: @-completion file listing best-effort */ }
       }
       return;
     }
 
-    if (key.leftArrow) {
-      setCursorPos(prev => Math.max(0, prev - (key.ctrl ? wordLeft(inputRef.current, prev) : 1)));
-      return;
-    }
-    if (key.rightArrow) {
-      setCursorPos(prev => Math.min(inputRef.current.length, prev + (key.ctrl ? wordRight(inputRef.current, prev) : 1)));
-      return;
-    }
-    if (key.home || (key.ctrl && (inputValue === 'a' || inputValue === 'A'))) {
-      setCursorPos(0);
-      return;
-    }
-    if (key.end || (key.ctrl && (inputValue === 'e' || inputValue === 'E'))) {
-      setCursorPos(inputRef.current.length);
-      return;
-    }
-
-    if (key.backspace || key.delete || inputValue === '\x7f' || inputValue === '\b') {
-      const pos = cursorPos;
-      // Windows PowerShell sends \x7f for Backspace, Ink maps to key.delete.
-      // Treat all as delete-before-cursor since actual Delete key is rare in terminal.
-      if (pos > 0) {
-        inputRef.current = inputRef.current.slice(0, pos - 1) + inputRef.current.slice(pos);
-        setCursorPos(pos - 1);
-      }
-      setInput(inputRef.current);
-      return;
-    }
-
-    if (inputValue && inputValue !== '\x7f' && inputValue !== '\b') {
+    // Regular character input
+if (inputValue && inputValue !== '\x7f' && inputValue !== '\b') {
       if (inputRef.current.length >= MAX_INPUT_CHARS) return;
       const pos = cursorPos;
       inputRef.current = inputRef.current.slice(0, pos) + inputValue + inputRef.current.slice(pos);
@@ -956,15 +1003,15 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       <Box flexDirection="column" flexGrow={1} padding={1}>
         <StartupHeader />
         {messages.length > visibleCount && (
-          <Text color="dim">{messages.length - visibleCount} more messages hidden. /more to show</Text>
+          <Text color={theme.textMuted}>{messages.length - visibleCount} more messages hidden. /more to show</Text>
         )}
         {messages.slice(Math.max(0, messages.length - visibleCount)).map((msg, i) => (
           <Box key={i} marginBottom={1}>
             <Text color={
-              msg.role === 'user' ? 'cyan' :
-              msg.role === 'assistant' ? 'green' :
-              msg.role === 'tool' ? 'yellow' :
-              msg.role === 'tool_result' ? 'gray' : 'red'
+              msg.role === 'user' ? theme.userMsg :
+              msg.role === 'assistant' ? theme.assistantMsg :
+              msg.role === 'tool' ? theme.toolMsg :
+              msg.role === 'tool_result' ? theme.toolResultMsg : theme.systemMsg
             }>
               {msg.role === 'user' ? '>' : msg.role === 'assistant' ? '●' : msg.role === 'tool' ? '⚡' : '!'}{' '}
             </Text>
@@ -975,7 +1022,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
             )}
           </Box>
         ))}
-        {isProcessing && <Text color="dim">▋</Text>}
+        {isProcessing && <Text color={theme.textMuted}>▋</Text>}
       </Box>
       {input.startsWith('/') && input.length <= 15 && !input.includes(' ') && (
         <Box flexDirection="column" marginBottom={1} paddingLeft={3}>
@@ -983,33 +1030,50 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
             .filter(c => c.startsWith(input.toLowerCase()))
             .slice(0, 10)
             .map((cmd, i) => (
-              <Text key={i} color="cyan">{cmd}</Text>
+              <Text key={i} color={theme.primary}>{cmd}</Text>
             ))}
         </Box>
       )}
-      {confirmInfo && (
-        <Box borderStyle="single" borderColor="#9b59b6" paddingX={1} marginBottom={1}>
+{confirmInfo && (
+        <Box borderStyle="single" borderColor={theme.primary} paddingX={1} marginBottom={1}>
           <Box flexDirection="column">
-            <Text color="#9b59b6" bold> Confirm tool execution</Text>
-            <Text color="yellow">  Tool: {confirmInfo.toolName}</Text>
-            {confirmInfo.args && <Text color="dim">  {JSON.stringify(confirmInfo.args).slice(0, 200)}</Text>}
-            <Text color="cyan">  Approve? (y/n) </Text>
+            <Text color={theme.primary} bold> Confirm tool execution</Text>
+            <Text color={theme.toolMsg}>  Tool: {confirmInfo.toolName}</Text>
+            {confirmInfo.args && <Text color={theme.textMuted}>  {JSON.stringify(confirmInfo.args).slice(0, 200)}</Text>}
+            <Text color={theme.textMuted}>  Approve? (y/n) </Text>
           </Box>
         </Box>
-      )}
-      <Box borderStyle="single" borderColor="dim" padding={1}>
-        <Box flexDirection="column">
-          {input.split('\n').map((line, li, arr) => (
-            <Box key={li} flexDirection="row">
-              <Text color="cyan">{li === 0 ? '› ' : '  '}</Text>
-              <Text>{line || (input.length === 0 && li === 0 ? <Text color="dim">Type a task... (/help)</Text> : '')}</Text>
-              {li === arr.length - 1 && <Text color="dim">█</Text>}
+        )}
+        {config.statusBar?.enabled !== false && (
+          <StatusBar
+            sessionName={sessionName}
+            model={model}
+            effort={effort}
+            permMode={permMode}
+            isProcessing={isProcessing}
+            config={config}
+            theme={theme}
+            tokenEstimate={tokenEstimate}
+            compactThreshold={config.session?.compactThreshold || 160000}
+            mcpConnected={!!ctx?.mcpClient?.servers?.size}
+            gitBranch={gitBranch}
+          />
+        )}
+        {!config.statusBar?.enabled && (
+          <Box borderStyle="single" borderColor={theme.border} padding={1}>
+            <Box flexDirection="column">
+              {input.split('\n').map((line, li, arr) => (
+                <Box key={li} flexDirection="row">
+                  <Text color={theme.primary}>{li === 0 ? '› ' : '  '}</Text>
+                  <Text>{line || (input.length === 0 && li === 0 ? <Text color={theme.textMuted}>Type a task... (/help)</Text> : '')}</Text>
+                  {li === arr.length - 1 && <Text color={theme.textMuted}>█</Text>}
+                </Box>
+              ))}
+              {!input && <Box flexDirection="row"><Text color={theme.primary}>› </Text><Text color={theme.textMuted}>Type a task... (/help)</Text><Text color={theme.textMuted}>█</Text></Box>}
             </Box>
-          ))}
-          {!input && <Box flexDirection="row"><Text color="cyan">› </Text><Text color="dim">Type a task... (/help)</Text><Text color="dim">█</Text></Box>}
-        </Box>
-        <Text color="dim">{sessionName ? `[${sessionName}] ` : ''}{model} | effort:{effort} | [{permMode}]{input.includes('\n') ? ' [MULTI]' : ''} Shift+Tab to cycle | Shift+Enter for newline</Text>
-      </Box>
+            <Text color={theme.textMuted}>{sessionName ? `[${sessionName}] ` : ''}{model} | effort:{effort} | [{permMode}]{input.includes('\n') ? ' [MULTI]' : ''} Shift+Tab cycle | Shift+Enter newline | Enter=interrupt | Alt+Enter=follow-up</Text>
+          </Box>
+        )}
       </>)}
     </Box>
   );
@@ -1017,6 +1081,12 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
 
 async function bootstrapInteractive() {
   const config = loadConfig();
+
+  configureLogger({
+    level: config.logging?.level,
+    sinks: config.logging?.sinks,
+    file: config.logging?.file,
+  });
 
   let existingSession: SessionData | undefined;
   const args = process.argv.slice(2);
@@ -1078,9 +1148,32 @@ async function bootstrapInteractive() {
 
   await ensureKeyForProvider(config);
   checkUpdate();
-  render(<App initialConfig={config} existingSession={existingSession} />);
+
+  // Initialize sandbox
+  setSandboxConfig(config.sandbox);
+
+  // Load extensions
+  const builtInContributions: ExtensionContribution = {
+    tools: [],
+    commands: [],
+    overlays: [],
+    themes: [],
+    skills: [],
+    providers: [],
+    keybindings: [],
+  };
+  
+  const extensions = loadExtensions(config.keybindings?.path || '~/.zor/extensions');
+  const mergedContributions = mergeContributions(builtInContributions, extensions);
+  // TODO: register merged contributions into registries
+
+  render(
+    <ThemeProvider config={config}>
+      <App initialConfig={config} existingSession={existingSession} />
+    </ThemeProvider>
+  );
   if (process.stdin.isTTY) {
-    try { process.stdin.setRawMode(true); } catch {}
+    try { process.stdin.setRawMode(true); } catch { /* ponytail: non-critical on Windows */ }
   }
 }
 
@@ -1097,9 +1190,15 @@ async function checkUpdate() {
         (latest[0] === current[0] && latest[1] === current[1] && latest[2] > current[2])) {
       console.error(`\n  Zor v${data.tag_name} available (current: v${VERSION})\n  Update: curl -fsSL https://raw.githubusercontent.com/zor-ai/zor/main/install.sh | sh\n`);
     }
-  } catch {}
+  } catch { /* ponytail: update check is best-effort, no network = no warning */ }
 }
-
+ 
+if (process.argv.includes('--rpc')) {
+  const { runRpc } = await import('./rpc');
+  await runRpc();
+  process.exit(0);
+}
+ 
 if (IS_PIPED) {
   const chunks: string[] = [];
   process.stdin.setEncoding('utf8');

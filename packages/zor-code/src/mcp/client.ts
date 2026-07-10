@@ -186,7 +186,7 @@ export class MCPClient {
               serverName,
             })));
           }
-        } catch {}
+        } catch (e: any) { logger.debug(`MCP: non-matching message in discoverTools for ${serverName}`, { error: e.message }); }
       };
       server.process.stdout.on('data', handler);
       server.process.stdin.write(JSON.stringify(request) + '\n');
@@ -198,7 +198,7 @@ export class MCPClient {
       const msg = JSON.parse(data);
       if (msg.method === 'notifications/initialized') return;
       if (msg.method === 'log/message') return;
-    } catch {}
+    } catch (e: any) { logger.debug(`MCP: unparseable message from ${_serverName}`, { error: e.message }); }
   }
 
   async callTool(serverName: string, toolName: string, args: any): Promise<any> {
@@ -211,15 +211,21 @@ export class MCPClient {
         params: { name: toolName, arguments: args },
       };
       return new Promise((resolve, reject) => {
+        // ponytail: 30s timeout prevents MCP hang if server never responds
+        const timer = setTimeout(() => {
+          server.process.stdout.off('data', handler);
+          reject(new Error(`MCP callTool timeout: ${toolName} on ${serverName} (30s)`));
+        }, 30000);
         const handler = (data: Buffer) => {
           try {
             const msg = JSON.parse(data.toString());
             if (msg.id === request.id) {
+              clearTimeout(timer);
               server.process.stdout.off('data', handler);
               if (msg.error) reject(new Error(msg.error.message));
               else resolve(msg.result);
             }
-          } catch {}
+          } catch (e: any) { logger.debug(`MCP: non-target message in callTool ${toolName}`, { error: e.message }); }
         };
         server.process.stdout.on('data', handler);
         server.process.stdin.write(JSON.stringify(request) + '\n');

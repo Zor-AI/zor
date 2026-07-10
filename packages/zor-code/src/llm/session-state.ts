@@ -21,7 +21,7 @@ function ensurePermissions() {
   try {
     if (existsSync(CONFIG_DIR)) chmodSync(CONFIG_DIR, 0o700);
     if (existsSync(LAST_SESSION_FILE)) chmodSync(LAST_SESSION_FILE, 0o600);
-  } catch {}
+  } catch (e: any) { /* ponytail: non-critical, permissions are best-effort */ }
 }
 
 export function loadLastSession(): LastSession | null {

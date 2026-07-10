@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+import { checkHostAccess } from '../sandbox';
 
 const BLOCKED_HOSTS = new Set([
   '169.254.169.254', 'metadata.google.internal', '0.0.0.0', '127.0.0.1', 'localhost',
@@ -31,7 +32,13 @@ export const webFetchTool: AgentTool = {
   execute: async (_id, params): Promise<AgentToolResult<any>> => {
     try {
       const { url, format } = params as Record<string, any>;
-      validateUrl(url);
+      const parsed = validateUrl(url);
+      
+      const hostAccess = checkHostAccess(parsed.hostname);
+      if (!hostAccess.allowed) {
+        return { content: [{ type: 'text' as const, text: `WebFetch blocked: ${hostAccess.reason}` }], details: { isError: true } };
+      }
+      
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30000);
       const res = await fetch(url, {
@@ -39,20 +46,20 @@ export const webFetchTool: AgentTool = {
         headers: { 'User-Agent': 'ZorCode/0.1.0' },
       });
       clearTimeout(timer);
-      if (!res.ok) return { content: [{ type: 'text' as const, text: `Fetch failed: HTTP ${res.status}` }], details: {} };
+      if (!res.ok) return { content: [{ type: 'text', text: `Fetch failed: HTTP ${res.status}` }], details: {} };
       const contentType = res.headers.get('content-type') || '';
       const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml');
       const text = await res.text();
 
       if (format === 'html' || isHtml) {
         const truncated = text.slice(0, 100_000);
-        return { content: [{ type: 'text' as const, text: truncated }], details: { contentType } };
+        return { content: [{ type: 'text', text: truncated }], details: { contentType } };
       }
 
       const truncated = text.slice(0, 50_000);
-      return { content: [{ type: 'text' as const, text: truncated }], details: { contentType } };
+      return { content: [{ type: 'text', text: truncated }], details: { contentType } };
     } catch (e: any) {
-      return { content: [{ type: 'text' as const, text: `WebFetch error: ${e.message}` }], details: { isError: true } };
+      return { content: [{ type: 'text', text: `WebFetch error: ${e.message}` }], details: { isError: true } };
     }
   },
 };

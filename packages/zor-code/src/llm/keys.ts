@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { getAllProviders, ProviderConfig, resolveApiKey } from './providers';
 import { encrypt, tryDecrypt } from '../utils/encrypt';
+import { getToken as getAuthToken } from './auth';
 
 export interface KeyEntry {
   provider: string;
@@ -23,7 +24,7 @@ function ensureKeyFilePermissions() {
   try {
     if (existsSync(CONFIG_DIR)) chmodSync(CONFIG_DIR, 0o700);
     if (existsSync(KEYS_FILE)) chmodSync(KEYS_FILE, 0o600);
-  } catch {}
+  } catch (e: any) { /* ponytail: chmod is best-effort on Windows, not critical */ }
 }
 
 export function loadKeys(): KeyEntry[] {
@@ -49,6 +50,8 @@ export function setKey(providerId: string, key: string) {
 }
 
 export function getKey(providerId: string): string | null {
+  const authToken = getAuthToken(providerId);
+  if (authToken) return authToken;
   const keys = loadKeys();
   const entry = keys.find(k => k.provider === providerId);
   return entry?.key || null;
@@ -59,18 +62,22 @@ export function removeKey(providerId: string) {
 }
 
 export function listKeys(): { provider: string; masked: string; setAt: string }[] {
-  return loadKeys().map(k => ({
-    provider: k.provider,
-    masked: k.key.slice(0, 6) + '...' + k.key.slice(-4),
-    setAt: k.setAt,
-  }));
+  return loadKeys().map(k => {
+    const auth = getAuthToken(k.provider);
+    const key = auth || k.key;
+    return {
+      provider: k.provider,
+      masked: key.slice(0, 6) + '...' + key.slice(-4),
+      setAt: k.setAt,
+    };
+  });
 }
 
 export function resolveKey(provider: ProviderConfig): string | null {
   if (provider.api === 'ollama') return 'ollama';
   const envKey = resolveApiKey(provider);
   if (envKey) return envKey;
-  return getKey(provider.id);
+  return getAuthToken(provider.id);
 }
 
 export function getKeyStatuses(): { provider: string; name: string; hasKey: boolean }[] {

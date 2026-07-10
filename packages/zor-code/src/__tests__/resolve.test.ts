@@ -60,14 +60,13 @@ vi.mock('../llm/ollama', () => ({
   ),
 }));
 
-import { resolveModel, listAllModels, listProvidersWithStatus } from '../llm/resolve';
+import { resolveModel, listAllModels } from '../llm/resolve';
 import { resolveKey } from '../llm/keys';
 
 const defaultConfig = {
   model: 'anthropic/claude-sonnet-4-20250514',
   effort: 'high',
   permissions: 'confirm',
-  sandbox: false,
   session: { dir: './.zor/sessions', compactThreshold: 160000 },
   mcp: { servers: [] },
 };
@@ -140,34 +139,5 @@ describe('listAllModels', () => {
     const models = await listAllModels();
     const ollamaModels = models.filter(m => m.providerId === 'ollama');
     expect(ollamaModels.length).toBeGreaterThan(0);
-  });
-});
-
-describe('listProvidersWithStatus', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('includes provider info', async () => {
-    const providers = await listProvidersWithStatus();
-    expect(providers.length).toBeGreaterThan(0);
-    for (const p of providers) {
-      expect(typeof p.id).toBe('string');
-      expect(typeof p.name).toBe('string');
-      expect(typeof p.available).toBe('boolean');
-      expect(typeof p.modelCount).toBe('number');
-    }
-  });
-
-  it('marks providers with keys as available', async () => {
-    const providers = await listProvidersWithStatus();
-    const anthropic = providers.find(p => p.id === 'anthropic');
-    expect(anthropic?.available).toBe(true);
-  });
-
-  it('marks ollama as available', async () => {
-    const providers = await listProvidersWithStatus();
-    const ollama = providers.find(p => p.id === 'ollama');
-    expect(ollama?.available).toBe(true);
   });
 });

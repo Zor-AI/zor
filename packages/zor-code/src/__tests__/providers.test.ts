@@ -69,8 +69,9 @@ describe('getAllProviders', () => {
     }
   });
 
-  it('returns PROVIDERS array directly', () => {
-    expect(getAllProviders()).toBe(PROVIDERS);
+  it('returns all providers (including custom)', () => {
+    const all = getAllProviders();
+    expect(all).toStrictEqual(PROVIDERS);
   });
 
   it('OpenAI provider has GPT models', () => {

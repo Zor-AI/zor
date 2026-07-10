@@ -77,7 +77,7 @@ export class SessionManager {
     if (!fs.existsSync(this.dir)) return [];
     return fs.readdirSync(this.dir)
       .filter(f => f.endsWith('.jsonl'))
-      .map(f => { try { return JSON.parse(tryDecrypt(fs.readFileSync(path.join(this.dir, f), 'utf8'))); } catch { return null; } })
+      .map(f => { try { return JSON.parse(tryDecrypt(fs.readFileSync(path.join(this.dir, f), 'utf8'))); } catch (e: any) { logger.warn(`Corrupt session file: ${f}`, { error: e.message }); return null; } })
       .filter((s): s is SessionData => s !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -93,7 +93,7 @@ export class SessionManager {
   load(id: string): SessionData | null {
     const file = path.join(this.dir, `${id}.jsonl`);
     if (!fs.existsSync(file)) return null;
-    try { return JSON.parse(tryDecrypt(fs.readFileSync(file, 'utf8'))); } catch { return null; }
+    try { return JSON.parse(tryDecrypt(fs.readFileSync(file, 'utf8'))); } catch (e: any) { logger.warn(`Failed to load session ${id}`, { error: e.message }); return null; }
   }
 
   getLatest(): SessionData | null {
@@ -107,7 +107,7 @@ export class SessionManager {
     const toDelete = sessions.slice(maxSessions);
     for (const s of toDelete) {
       const file = path.join(this.dir, `${s.id}.jsonl`);
-      try { fs.unlinkSync(file); } catch {}
+      try { fs.unlinkSync(file); } catch (e: any) { logger.debug(`Failed to prune session ${s.id}`, { error: e.message }); }
     }
   }
 }

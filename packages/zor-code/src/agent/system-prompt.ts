@@ -11,7 +11,7 @@ function loadProjectRules(): string {
       if (existsSync(p)) rules.push(readFileSync(p, 'utf8'));
     }
     if (rules.length > 0) return '\n\n## Project Instructions\n' + rules.join('\n\n---\n\n');
-  } catch {}
+  } catch (e: any) { /* ponytail: rules are best-effort, missing rules shouldn't crash the agent */ }
   return '';
 }
 

@@ -110,37 +110,3 @@ export async function listAllModels(): Promise<(ModelInfo & { providerId: string
 
   return result;
 }
-
-export async function listProvidersWithStatus(): Promise<{ id: string; name: string; available: boolean; modelCount: number }[]> {
-  return getAllProviders().map(p => ({
-    id: p.id,
-    name: p.name,
-    available: !!resolveKey(p),
-    modelCount: p.models.length,
-  }));
-}
-
-export async function pingProvider(provider: ProviderConfig): Promise<{ reachable: boolean; latency: number; error?: string }> {
-  const start = Date.now();
-  try {
-    if (provider.api === 'ollama') {
-      const running = await checkOllamaRunning();
-      return { reachable: running, latency: Date.now() - start, error: running ? undefined : 'Ollama not running' };
-    }
-
-    const key = resolveKey(provider);
-    if (!key) return { reachable: false, latency: 0, error: 'No API key configured' };
-
-    const url = provider.baseUrl.replace(/\/$/, '') + '/v1/models';
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    return { reachable: res.ok, latency: Date.now() - start };
-  } catch (e: any) {
-    return { reachable: false, latency: Date.now() - start, error: e.message };
-  }
-}

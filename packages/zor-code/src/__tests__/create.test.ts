@@ -61,10 +61,6 @@ vi.mock('../session/manager', () => ({
   }),
 }));
 
-vi.mock('../utils/rate-limiter', () => ({
-  RateLimiter: vi.fn().mockImplementation(function () { return { acquire: vi.fn(), remaining: 60 }; }),
-}));
-
 vi.mock('../llm/resolve', () => ({
   resolveModel: vi.fn().mockResolvedValue({
     provider: { id: 'anthropic', name: 'Anthropic' },
@@ -81,7 +77,6 @@ const defaultConfig = {
   model: 'anthropic/claude-sonnet-4-20250514',
   effort: 'high',
   permissions: 'confirm',
-  sandbox: false,
   session: { dir: './.zor/sessions', compactThreshold: 160000 },
   mcp: { servers: [] },
 };
@@ -99,8 +94,6 @@ describe('createZorAgent', () => {
     expect(result.sessionManager).toBeDefined();
     expect(result.session).toBeDefined();
     expect(result.mcpErrors).toEqual([]);
-    expect(result.rateLimiter).toBeDefined();
-    expect(result.circuitBreaker).toBeDefined();
   });
 
   it('creates model for known providers', async () => {

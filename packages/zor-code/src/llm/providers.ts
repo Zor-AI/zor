@@ -5,6 +5,9 @@ export interface ProviderConfig {
   baseUrl: string;
   envKey: string;
   models: ModelInfo[];
+  source?: 'built-in' | 'custom';
+  _custom?: boolean;
+  _customProvider?: any;
 }
 
 export interface ModelInfo {
@@ -28,8 +31,8 @@ export const PROVIDERS: ProviderConfig[] = [
     models: [
       { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', contextWindow: 200000, maxTokens: 8192, supportsThinking: true, supportsVision: true, pricing: { input: 15, output: 75 } },
       { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', contextWindow: 200000, maxTokens: 8192, supportsThinking: true, supportsVision: true, pricing: { input: 3, output: 15 } },
-      { id: 'claude-haiku-3-20240307', name: 'Claude Haiku 3', contextWindow: 200000, maxTokens: 4096, supportsThinking: false, supportsVision: true, pricing: { input: 0.25, output: 1.25 } },
     ],
+    source: 'built-in',
   },
 
   // ── OpenCode Go (proxy with Anthropic/OpenAI/DeepSeek/Google/etc models) ──
@@ -392,8 +395,10 @@ export const PROVIDERS: ProviderConfig[] = [
   },
 ];
 
+import { loadCustomProviders, mergeCustomProviders } from './custom-providers';
+
 export function getProvider(id: string): ProviderConfig | undefined {
-  return PROVIDERS.find(p => p.id === id);
+  return getAllProviders().find(p => p.id === id);
 }
 
 export function resolveApiKey(provider: ProviderConfig): string | null {
@@ -402,12 +407,17 @@ export function resolveApiKey(provider: ProviderConfig): string | null {
 }
 
 export function getAvailableProviders(): ProviderConfig[] {
-  return PROVIDERS.filter(p => {
+  return getAllProviders().filter(p => {
     if (p.api === 'ollama') return true;
     return !!process.env[p.envKey];
   });
 }
 
 export function getAllProviders(): ProviderConfig[] {
-  return PROVIDERS;
+  // Lazy-load custom providers
+  let custom: any[] = [];
+  try {
+    custom = loadCustomProviders('~/.zor/models.json');
+  } catch {}
+  return mergeCustomProviders(PROVIDERS, custom);
 }

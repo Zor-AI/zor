@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { useThemeStyles } from '../theme';
 
 interface SessionRow {
   id: string;
@@ -12,14 +13,15 @@ interface SessionRow {
 }
 
 function SessionPickerRow({ session, isSelected }: { session: SessionRow; isSelected: boolean }) {
+  const theme = useThemeStyles();
   const prefix = isSelected ? '>' : ' ';
   return (
     <Box>
-      <Text color={isSelected ? 'cyan' : 'white'}>
+      <Text color={isSelected ? theme.primary : theme.text}>
         {prefix} {session.display.padEnd(50).slice(0, 50)}
       </Text>
-      <Text color="dim"> {String(session.msgCount).padStart(4)} msgs</Text>
-      <Text color="dim">  {session.ago}</Text>
+      <Text color={theme.textMuted}> {String(session.msgCount).padStart(4)} msgs</Text>
+      <Text color={theme.textMuted}>  {session.ago}</Text>
     </Box>
   );
 }
@@ -33,6 +35,7 @@ export function SessionPicker({
   onSelect: (sessionId: string) => void;
   onCancel: () => void;
 }) {
+  const theme = useThemeStyles();
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [mode, setMode] = useState<'browse' | 'search'>('browse');
@@ -111,27 +114,27 @@ export function SessionPicker({
   if (sessions.length === 0) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text color="yellow">No sessions found.</Text>
-        <Text color="dim">Press Esc to go back.</Text>
+        <Text color={theme.warning}>No sessions found.</Text>
+        <Text color={theme.textMuted}>Press Esc to go back.</Text>
       </Box>
     );
   }
 
   return (
-    <Box flexDirection="column" padding={1} borderStyle="single" borderColor="cyan" marginTop={1}>
+    <Box flexDirection="column" padding={1} borderStyle="single" borderColor={theme.border} marginTop={1}>
       <Box marginBottom={1}>
-        <Text color="cyan" bold>Session Picker</Text>
-        <Text color="dim">  (↑↓/Enter/Esc / = search)</Text>
+        <Text color={theme.primary} bold>Session Picker</Text>
+        <Text color={theme.textMuted}>  (↑↓/Enter/Esc / = search)</Text>
       </Box>
       {mode === 'search' && (
         <Box marginBottom={1}>
-          <Text color="yellow">Search: </Text>
+          <Text color={theme.warning}>Search: </Text>
           <Text>{searchQuery}</Text>
-          <Text color="dim">█</Text>
+          <Text color={theme.textMuted}>█</Text>
         </Box>
       )}
       {rows.length === 0 && searchQuery ? (
-        <Text color="dim">No sessions matching "{searchQuery}"</Text>
+        <Text color={theme.textMuted}>No sessions matching "{searchQuery}"</Text>
       ) : (
         rows.slice(0, 20).map((row, i) => (
           <SessionPickerRow key={row.id} session={row} isSelected={i === safeIdx} />

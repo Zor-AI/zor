@@ -15,11 +15,9 @@ describe('Live Provider (NVIDIA NIM free tier)', () => {
         model: 'nvidia/nvidia/nemotron-3-super-120b-a12b',
         effort: 'low' as const,
         permissions: 'auto' as const,
-        sandbox: false,
         session: { dir: './.zor/sessions', compactThreshold: 160000 },
         mcp: { servers: [] },
       };
-
       const { agent, resolved } = await createZorAgent(config);
       expect(resolved.provider.id).toBe('nvidia');
 
@@ -44,11 +42,9 @@ describe('Live Provider (NVIDIA NIM free tier)', () => {
         model: 'nvidia/nvidia/nemotron-3-super-120b-a12b',
         effort: 'low' as const,
         permissions: 'auto' as const,
-        sandbox: false,
         session: { dir: './.zor/sessions', compactThreshold: 160000 },
         mcp: { servers: [] },
       };
-
       const { agent } = await createZorAgent(config);
       let text = '';
       agent.subscribe((event: any) => {

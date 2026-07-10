@@ -6,7 +6,7 @@ import { execSync, spawnSync, spawn } from 'child_process';
 import { ToolSearch } from './tools/search';
 import { webFetchTool } from './tools/webfetch';
 import { taskTool } from './subagent';
-import { Sandbox } from '../sandbox/sandbox';
+import { checkPathAccess, checkHostAccess } from './sandbox';
 
 function result(text: string, details?: any): AgentToolResult<any> {
   return { content: [{ type: 'text' as const, text }], details: details || {} };
@@ -84,6 +84,8 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { filepath, offset, limit } = params as Record<string, any>;
+        const access = checkPathAccess(filepath);
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const content = readFileContent(filepath, offset || 0, limit || 2000);
         return result(content);
       } catch (e: any) {
@@ -102,6 +104,8 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { filepath, content: fileContent } = params as Record<string, any>;
+        const access = checkPathAccess(filepath);
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const safePath = validatePath(filepath);
         fs.mkdirSync(path.dirname(safePath), { recursive: true });
         fs.writeFileSync(safePath, fileContent, 'utf8');
@@ -123,6 +127,8 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { filepath, oldString, newString } = params as Record<string, any>;
+        const access = checkPathAccess(filepath);
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const safePath = validatePath(filepath);
         const content = fs.readFileSync(safePath, 'utf8');
         if (!content.includes(oldString)) {
@@ -146,6 +152,8 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { pattern } = params as Record<string, any>;
+        const access = checkPathAccess(pattern);
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const { globSync } = await import('glob');
         const files = globSync(pattern, { nodir: true, cwd: process.cwd(), absolute: false }).slice(0, 200);
         return result(files.length > 0 ? files.join('\n') : 'No files found');
@@ -165,6 +173,8 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { pattern, include } = params as Record<string, any>;
+        const access = checkPathAccess(include || '.');
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const args = ['--line-number', '--with-filename', pattern];
         if (include) args.push('--include', include);
         const proc = spawnSync('rg', [...args, '.'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
@@ -182,7 +192,7 @@ export const coreTools: AgentTool[] = [
               }
               const lines = (psProc.stdout || '').trim().split('\n').slice(0, 100);
               return result(lines.length > 0 ? lines.join('\n') : 'No matches');
-            } catch {}
+            } catch { /* ponytail: PowerShell Select-String fallback, non-critical */ }
           }
           return result('Grep requires ripgrep installed: https://github.com/BurntSushi/ripgrep');
         }
@@ -203,13 +213,15 @@ export const coreTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { filepath } = params as Record<string, any>;
+        const access = checkPathAccess(filepath);
+        if (!access.allowed) return result(`Error: ${access.reason}`, { isError: true });
         const safePath = validatePath(filepath);
         const entries = fs.readdirSync(safePath, { withFileTypes: true });
         const lines = entries.map((e: fs.Dirent) => {
           const suffix = e.isDirectory() ? '/' : '';
           let size = '';
           if (e.isFile()) {
-            try { size = ` (${fs.statSync(path.join(safePath, e.name)).size}b)`; } catch {}
+            try { size = ` (${fs.statSync(path.join(safePath, e.name)).size}b)`; } catch { /* ponytail: file size is cosmetic */ }
           }
           return `${e.name}${suffix}${size}`;
         });
@@ -229,8 +241,9 @@ const gitTools: AgentTool[] = [
     parameters: Type.Object({}),
     execute: async () => {
       try {
-        const stdout = execSync('git status --porcelain --branch', { encoding: 'utf8', timeout: 5000 });
-        return result(stdout || '(clean working tree)');
+        const r = spawnSync('git', ['status', '--porcelain', '--branch'], { encoding: 'utf8', timeout: 5000 });
+        if (r.error) throw r.error;
+        return result(r.stdout || '(clean working tree)');
       } catch (e: any) {
         return result(`Not a git repository or git not available: ${e.message}`, { isError: true });
       }
@@ -250,8 +263,10 @@ const gitTools: AgentTool[] = [
         const args = ['diff'];
         if (staged) args.push('--staged');
         if (file) args.push('--', file);
-        const stdout = execSync(['git', ...args].join(' '), { encoding: 'utf8', maxBuffer: 5 * 1024 * 1024, timeout: 10000 });
-        return result(stdout || '(no changes)');
+        // ponytail: spawnSync with array args, no shell injection
+        const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 5 * 1024 * 1024, timeout: 10000 });
+        if (r.error) throw r.error;
+        return result(r.stdout || '(no changes)');
       } catch (e: any) {
         return result(e.stdout?.toString() || e.message, { isError: true });
       }
@@ -267,8 +282,9 @@ const gitTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const n = (params as Record<string, any>).count || 10;
-        const stdout = execSync(`git log --oneline -n ${n}`, { encoding: 'utf8', timeout: 5000 });
-        return result(stdout || '(no commits)');
+        const r = spawnSync('git', ['log', '--oneline', '-n', String(n)], { encoding: 'utf8', timeout: 5000 });
+        if (r.error) throw r.error;
+        return result(r.stdout || '(no commits)');
       } catch (e: any) {
         return result(`Not a git repository or git not available: ${e.message}`, { isError: true });
       }
@@ -284,8 +300,11 @@ const gitTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { files } = params as Record<string, any>;
-        const stdout = execSync(`git add ${files}`, { encoding: 'utf8', timeout: 5000 });
-        return result(stdout || `Staged: ${files}`);
+        // ponytail: spawnSync array args prevent shell injection vs execSync(string)
+        const fileList = files.split(' ').filter((f: string) => f.length > 0);
+        const r = spawnSync('git', ['add', ...fileList], { encoding: 'utf8', timeout: 5000 });
+        if (r.error) throw r.error;
+        return result(r.stdout || `Staged: ${files}`);
       } catch (e: any) {
         return result(e.stderr?.toString() || `Failed to stage: ${e.message}`, { isError: true });
       }
@@ -301,9 +320,10 @@ const gitTools: AgentTool[] = [
     execute: async (_id, params) => {
       try {
         const { message } = params as Record<string, any>;
-        const escaped = message.replace(/"/g, '\\"');
-        const stdout = execSync(`git commit -m "${escaped}"`, { encoding: 'utf8', timeout: 10000 });
-        return result(stdout || 'Commit created');
+        // ponytail: spawnSync with array args, no shell escaping needed
+        const r = spawnSync('git', ['commit', '-m', message], { encoding: 'utf8', timeout: 10000 });
+        if (r.error) throw r.error;
+        return result(r.stdout || 'Commit created');
       } catch (e: any) {
         return result(e.stdout?.toString() || e.stderr?.toString() || `Failed to commit: ${e.message}`, { isError: true });
       }
@@ -315,24 +335,7 @@ export function getReadOnlyTools(): AgentTool[] {
   return coreTools.filter(t => ['Read', 'Glob', 'Grep', 'Ls'].includes(t.name));
 }
 
-export function buildToolSet(config: any, mcpClient: any, sandbox?: Sandbox): AgentTool[] {
+export function buildToolSet(config: any, mcpClient: any): AgentTool[] {
   const mcpTools = mcpClient.getTools();
-  const tools = sandbox ? coreTools.map(t => {
-    if (t.name !== 'Bash') return t;
-    return {
-      ...t,
-      execute: async (_id: string, params: any, _signal: any, onUpdate: any) => {
-        try {
-          const cmd = (params as Record<string, any>).command;
-          onUpdate?.({ content: [{ type: 'text' as const, text: `[sandbox] Running: ${cmd.slice(0, 100)}...\n` }], details: {} });
-          const { stdout, stderr, exitCode } = await sandbox.exec(cmd, 30000);
-          const output = (stdout + (stderr ? '\n' + stderr : '')).slice(0, 50000);
-          return result(output || 'Command completed');
-        } catch (e: any) {
-          return result(e.stderr?.toString() || e.stdout?.toString() || `exit code ${e.status ?? 1}`, { isError: true });
-        }
-      },
-    };
-  }) : coreTools;
-  return [...tools, ...gitTools, ToolSearch(mcpClient), taskTool, ...mcpTools, webFetchTool];
+  return [...coreTools, ...gitTools, ToolSearch(mcpClient), taskTool, ...mcpTools, webFetchTool];
 }

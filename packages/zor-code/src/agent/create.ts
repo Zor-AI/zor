@@ -8,13 +8,9 @@ import { assembleSystemPrompt } from './system-prompt';
 import { buildToolSet } from './tools';
 import { MCPClient } from '../mcp/client';
 import { SessionManager, SessionData } from '../session/manager';
-import { RateLimiter } from '../utils/rate-limiter';
 import { logger } from '../utils/logger';
-import { withRetry } from '../utils/retry';
-import { CircuitBreaker } from '../utils/circuit-breaker';
 import type { ZorConfig } from '../config';
 import { resolveModel } from '../llm/resolve';
-import { Sandbox } from '../sandbox/sandbox';
 
 function createModel(providerId: string, modelId: string): Model<any> {
   const knownProviders: string[] = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'mistral', 'xai', 'together', 'fireworks', 'cerebras', 'nvidia', 'minimax', 'openrouter', 'moonshotai', 'huggingface', 'zai', 'cloudflare', 'github-copilot', 'amazon-bedrock', 'azure-openai', 'google-vertex', 'opencode', 'opencode-go'];
@@ -36,9 +32,6 @@ export async function createZorAgent(config: ZorConfig, existingSession?: Sessio
   const sessionManager = new SessionManager(config.session.dir);
   const session = existingSession || sessionManager.create();
   sessionManager.prune(1000);
-  const rateLimiter = new RateLimiter({ maxRequests: 60, windowMs: 60_000 });
-  const circuitBreaker = new CircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 15000 });
-  const sandbox = config.sandbox ? new Sandbox() : undefined;
   const mcpErrors: string[] = [];
 
   for (const serverConfig of config.mcp.servers) {
@@ -59,7 +52,7 @@ export async function createZorAgent(config: ZorConfig, existingSession?: Sessio
       systemPrompt: assembleSystemPrompt(config),
       model,
       thinkingLevel: config.effort as any,
-      tools: buildToolSet(config, mcpClient, sandbox),
+      tools: buildToolSet(config, mcpClient),
       messages: session.messages || [],
     },
 
@@ -94,5 +87,5 @@ export async function createZorAgent(config: ZorConfig, existingSession?: Sessio
     }
   });
 
-  return { agent, model, mcpClient, sessionManager, session, resolved, mcpErrors, rateLimiter, circuitBreaker };
+  return { agent, model, mcpClient, sessionManager, session, resolved, mcpErrors };
 }

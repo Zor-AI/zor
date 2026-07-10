@@ -13,7 +13,6 @@ describe('loadConfig', () => {
     expect(config.model).toBe('opencode/claude-sonnet-4');
     expect(config.effort).toBe('high');
     expect(config.permissions).toBe('confirm');
-    expect(config.sandbox).toBe(false);
   });
 
   it('handles invalid JSON gracefully', () => {
@@ -31,7 +30,6 @@ describe('loadConfig', () => {
     expect(config).toHaveProperty('model');
     expect(config).toHaveProperty('effort');
     expect(config).toHaveProperty('permissions');
-    expect(config).toHaveProperty('sandbox');
     expect(config).toHaveProperty('session');
     expect(config).toHaveProperty('mcp');
     expect(config.session).toHaveProperty('dir');

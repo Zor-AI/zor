@@ -16,6 +16,7 @@ export function countTokens(text: string): number {
     const enc = getEncoding();
     return enc.encode(text).length;
   } catch {
+    // ponytail: tiktoken fallback — char/4 heuristic when wasm fails to load
     return Math.round(text.length / 4);
   }
 }
