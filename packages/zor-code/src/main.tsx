@@ -6,12 +6,12 @@ import { relative, resolve, join } from 'path';
 import { createZorAgent } from './agent/create';
 import { loadConfig, ZorConfig, VERSION } from './config';
 import { slashCommands } from './commands/slash-commands';
+import { SPECKIT_PROMPTS } from './commands/speckit';
 import { getKeyStatuses, resolveKey, setKey } from './llm/keys';
 import { listAllModels } from './llm/resolve';
 import { getProvider } from './llm/providers';
 import { loadLastSession, saveLastSession } from './llm/session-state';
 import { logger } from './utils/logger';
-import { withRetry } from './utils/retry';
 import { SessionManager, SessionData } from './session/manager';
 import { SessionPicker } from './tui/session-picker';
 import { setConfirmationCallback, getPendingConfirmation, resolveConfirmation } from './permissions/confirm';
@@ -38,6 +38,8 @@ Slash commands (inside TUI):
   /model, /use, /keys, /providers, /models, /ollama
   /effort, /cost, /status, /context, /init
   /fork, /tree, /compact, /rename, /resume
+  /speckit.constitution, /speckit.specify, /speckit.clarify
+  /speckit.plan, /speckit.tasks, /speckit.implement, /speckit.converge
   /clear, /more, /help, /exit`);
   process.exit(0);
 }
@@ -267,7 +269,6 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
   const submitRef = useRef<(text: string) => void>((t: string) => {});
   const processingRef = useRef(false);
   const initAgentRef = useRef<(opts?: { skipFallback?: boolean }) => Promise<any>>(() => Promise.resolve(null));
-  const circuitBreakerRef = useRef<any>(null);
   const abortRef = useRef<(() => void) | null>(null);
   const checkpointsRef = useRef<Array<{ path: string; content: string }>>([]);
 
@@ -286,11 +287,10 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       config.model = `${fallback.provider}/${fallback.provider === 'ollama' ? 'llama3' : 'claude-sonnet-4'}`;
     }
     try {
-      const { agent, resolved, sessionManager, session, mcpErrors, circuitBreaker } = await createZorAgent(config, existingSession);
+      const { agent, resolved, sessionManager, session, mcpErrors } = await createZorAgent(config, existingSession);
       setAgentRef(agent);
       setModel(resolved.provider.id + '/' + resolved.model.id);
       setCtx({ agent, config, sessionManager, session });
-      circuitBreakerRef.current = circuitBreaker;
       saveLastSession(resolved.provider.id, resolved.model.id);
       if (mcpErrors.length > 0) setMessages(prev => [...prev, { role: 'system', content: `MCP warnings:\n${mcpErrors.join('\n')}` }]);
       agent.subscribe((event: any) => {
@@ -463,12 +463,47 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
 
     if (cmd === 'help') {
       const lines = Object.values(slashCommands).map(c => `  ${c.name.padEnd(12)} ${c.description}`);
+      lines.push('  /speckit.constitution  Set project principles');
+      lines.push('  /speckit.specify  Create feature spec');
+      lines.push('  /speckit.clarify  Clarify underspecified areas');
+      lines.push('  /speckit.plan     Create implementation plan');
+      lines.push('  /speckit.tasks    Generate task breakdown');
+      lines.push('  /speckit.implement  Execute implementation');
+      lines.push('  /speckit.converge Audit code vs spec');
       lines.push('  /clear           Clear screen');
       lines.push('  /more            Show 200 more messages');
       lines.push('  /exit            Exit Zor');
       lines.push('  /help            This help');
       setMessages(prev => [...prev, { role: 'assistant', content: `Commands:\n${lines.join('\n')}` }]);
       setIsProcessing(false);
+      return;
+    }
+
+    // Speckit commands: build prompt, feed to agent
+    if (cmd.startsWith('speckit.')) {
+      const speckitCmd = cmd.replace('speckit.', '');
+      if (!SPECKIT_PROMPTS[speckitCmd]) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Unknown speckit command: ${speckitCmd}. Available: ${Object.keys(SPECKIT_PROMPTS).join(', ')}` }]);
+        setIsProcessing(false);
+        return;
+      }
+      const userInput = parts.slice(1).join(' ').trim();
+      const prompt = SPECKIT_PROMPTS[speckitCmd](userInput);
+
+      let agent = agentRef;
+      if (!initAgentRef.current) { setIsProcessing(false); return; }
+      if (!agent) {
+        try { agent = await initAgentRef.current({ skipFallback: true }); } catch { setIsProcessing(false); return; }
+        if (!agent) { setIsProcessing(false); return; }
+      }
+
+      setMessages(prev => [...prev, { role: 'user', content: prompt }]);
+      try {
+        agent.prompt(prompt);
+      } catch (e: any) {
+        setMessages(prev => [...prev, { role: 'system', content: `Error: ${e.message}` }]);
+      }
+      setTimeout(() => setIsProcessing(false), 120000);
       return;
     }
 
@@ -668,47 +703,18 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       return;
     }
 
-    const cb = circuitBreakerRef.current;
-    const providerId = config.model.split('/')[0];
-    if (cb && !cb.canExecute(providerId)) {
-      const statuses = getKeyStatuses().filter(s => s.hasKey && s.provider !== providerId && s.provider !== 'ollama');
-      const fallback = statuses.find(s => cb.canExecute(s.provider));
-      if (fallback) {
-        const p = getProvider(fallback.provider);
-        const fallbackModel = p?.models[0]?.id || 'claude-sonnet-4';
-        const newTarget = `${fallback.provider}/${fallbackModel}`;
-        setMessages(prev => [...prev,
-          { role: 'system', content: `Provider ${providerId} unavailable. Switching to ${newTarget}...` }]);
-        config.model = newTarget;
-        saveLastSession(fallback.provider, fallbackModel);
-        initAgentRef.current({ skipFallback: true }).then((agent) => {
-          if (!agent) { setIsProcessing(false); return; }
-          agent.prompt(trimmed);
-          setTimeout(() => setIsProcessing(false), 120000);
-        });
-        return;
-      }
-      setMessages(prev => [...prev, { role: 'system', content: `Provider ${providerId} is temporarily unavailable and no fallback available.` }]);
-      setIsProcessing(false);
-      return;
-    }
-
     try {
       const isPlan = permMode === 'plan';
       const finalPrompt = isPlan ? `${trimmed}\n\n[Plan mode active. Do NOT run Write/Edit/Bash tools. Instead, explain what you WOULD do: which files to modify, what commands to run, and why. Present a plan for user approval.]` : trimmed;
       const result = agentRef.prompt(finalPrompt);
       if (result && typeof result.then === 'function') {
-        result
-          .then(() => { if (cb) cb.success(providerId); })
-          .catch((err: any) => {
-            if (cb) cb.failure(providerId);
-            setMessages(prev => [...prev, { role: 'system', content: `Agent error: ${err.message}` }]);
-            setIsProcessing(false);
-          });
+        result.catch((err: any) => {
+          setMessages(prev => [...prev, { role: 'system', content: `Agent error: ${err.message}` }]);
+          setIsProcessing(false);
+        });
       }
       setTimeout(() => setIsProcessing(false), 120000);
     } catch (e: any) {
-      if (cb) cb.failure(providerId);
       setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
       setIsProcessing(false);
     }
@@ -805,7 +811,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
     if (key.tab) {
       const current = inputRef.current;
       if (current.startsWith('/')) {
-        const allCommands = ['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume', '/export'];
+        const allCommands = ['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume', '/export', '/speckit.constitution', '/speckit.specify', '/speckit.clarify', '/speckit.plan', '/speckit.tasks', '/speckit.implement', '/speckit.converge'];
         const matches = allCommands.filter(c => c.startsWith(current.toLowerCase()));
         if (matches.length === 1) {
           inputRef.current = matches[0];
@@ -912,7 +918,6 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
                 setAgentRef(agent);
                 setModel(resolved.provider.id + '/' + resolved.model.id);
                 setCtx({ agent, config, sessionManager: sm, session: sess });
-                circuitBreakerRef.current = undefined;
                 if (mcpErrors.length > 0) setMessages(prev => [...prev, { role: 'system', content: `MCP warnings:\n${mcpErrors.join('\n')}` }]);
                 agent.subscribe((event: any) => {
                   try {
@@ -974,7 +979,7 @@ function App({ initialConfig, existingSession }: { initialConfig: ZorConfig; exi
       </Box>
       {input.startsWith('/') && input.length <= 15 && !input.includes(' ') && (
         <Box flexDirection="column" marginBottom={1} paddingLeft={3}>
-          {['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume']
+          {['/clear', '/more', '/exit', '/help', '/use', '/model', '/keys', '/providers', '/models', '/ollama', '/fork', '/tree', '/cost', '/compact', '/status', '/effort', '/rename', '/context', '/init', '/resume', '/speckit.constitution', '/speckit.specify', '/speckit.clarify', '/speckit.plan', '/speckit.tasks', '/speckit.implement', '/speckit.converge']
             .filter(c => c.startsWith(input.toLowerCase()))
             .slice(0, 10)
             .map((cmd, i) => (
